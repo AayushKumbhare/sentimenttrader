@@ -121,3 +121,50 @@ def run_strategy(strategy_type, symbol):
 
 run_strategy(SentimentTrader, 'WDAY')
 
+# Example usage:
+if __name__ == "__main__":
+    # Create a test user first (since we need a valid user_id)
+    try:
+        # Create a proper password hash for testing
+        test_password = "pass123"
+        password_hash = hashlib.sha256(test_password.encode()).hexdigest()
+        
+        user_data = {
+            'email': 'testuser2@example.com',
+            'password_hash': password_hash,
+            'created_at': datetime.now().isoformat(),
+            'experience_level': 'advanced',
+            'risk_tolerance': 'medium',
+            'paper_trading_balance': 10000.0
+        }
+        user_result = supabase.table('users').insert(user_data).execute()
+        user_id = user_result.data[0]['user_id']
+        print(f"Created test user with ID: {user_id}")
+    except Exception as e:
+        # If user creation fails (maybe already exists), try to get existing user
+        print(f"User creation failed: {e}")
+        existing_user = supabase.table('users').select('user_id').eq('email', 'testuser@example.com').execute()
+        if existing_user.data:
+            user_id = existing_user.data[0]['user_id']
+            print(f"Using existing user ID: {user_id}")
+        else:
+            print("Could not create or find user")
+            exit(1)
+    
+    # Run backtest and save to database
+    portfolio_id = run_database_strategy(
+        user_id=user_id,
+        symbol='AAPL',
+        sentiment_threshold=0.05,
+        hold_days=10
+    )
+    
+    # Retrieve user's backtests
+    backtest_manager = BacktestManager()
+    user_backtests = backtest_manager.get_user_backtests(user_id)
+    
+    # Get transactions for this backtest
+    transactions = backtest_manager.get_backtest_transactions(portfolio_id)
+    print(f"\nTransactions for backtest {portfolio_id}:")
+    for tx in transactions:
+        print(f"- {tx['transaction_type'].upper()} {tx['quantity']} {tx['symbol']} at ${tx['price']:.2f}")
