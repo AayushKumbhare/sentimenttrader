@@ -7,15 +7,26 @@ from textblob import TextBlob
 import feedparser
 import numpy as np
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from supabase import create_client, Client
+import hashlib
+import os
 
+load_dotenv()
+
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+supabase : Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 class SentimentTrader(bt.Strategy):
-    def __init__(self, symbol, sentiment_threshold=0.01, hold_days=365):
+    def __init__(self, symbol, portfolio_id, sentiment_threshold=0.01, hold_days=365):
         self.symbol = symbol
         self.sentiment_threshold = sentiment_threshold
         self.hold_days = hold_days
         self.hold_counter = 0
         self.order = None
+        self.db = TraderDatabase()
+        self.portfolio_id = portfolio_id
 
     def get_sentiment(self):
         try:
@@ -44,10 +55,22 @@ class SentimentTrader(bt.Strategy):
             self.hold_counter += 1
             if self.hold_counter >= self.hold_days:
                 self.order = self.sell()
+                self.db.execute_sell_order(
+                    self.portfolio_id,
+                    self.symbol,
+                    self.position.size,
+                    self.data.close[0]
+                )
                 print(f"Timed SELL at {self.data.close[0]}")
                 self.hold_counter = 0
         elif signal == 'buy':
             self.order = self.buy()
+            self.db.execute_buy_order(
+                self.portfolio_id, 
+                self.symbol, 
+                self.position.size, 
+                self.data.close[0]
+                )
             print(f"BUY at {self.data.close[0]}")
             self.hold_counter = 0
 
@@ -68,8 +91,144 @@ class SentimentTrader(bt.Strategy):
         return data
 
     
+class TraderDatabase():
+    def __init__(self):
+        self.supabase = supabase
 
-def run_strategy(strategy_type, symbol):
+    def create_user(self, email, password):
+        try:
+            hashed_pass = hashlib.sha256(password.encode()).hexdigest()
+            
+            user_info = {
+                'email': email,
+                'password_hash': hashed_pass,
+                'created_at': datetime.now()
+            }
+
+            result = supabase.table('users').insert(user_info).execute()
+            user_id = result.data[0]['user_id']
+            print(f"Created user with user_id {user_id}")
+            return user_id
+        except Exception as e:
+            print(f"Failed creating user. Error: {e}")
+
+
+    def get_user_by_email(self, email):
+        try:
+            result = supabase.table('users').select('*').eq('email', email).execute()
+            if result.data and len(result.data) > 0:
+                return result.data[0]
+            else:
+                print(f"No user with email: {email}")
+                return None
+        except Exception as e:
+            print(f"Failed getting user with email: {email}")
+            return None
+        
+    def get_user_by_id(self, user_id):  
+        try:
+            result = supabase.table('users').select('*').eq('user_id', user_id).execute()
+            if result.data and len(result.data) > 0:
+                return result.data[0]
+            else:
+                print(f"No user with user_id: {user_id}")
+                return None
+        except Exception as e:
+            print(f"Failed getting user with user_id: {user_id}")
+            return None
+        
+    def create_portfolio(self, email, name, cash_balance, created_at):
+        try:
+            user = self.get_user_by_email(email)
+            if not user:
+                print(f"No user found with email: {email}")
+            user_id = user['user_id']
+            portfolio_info = {
+                'user_id': user_id,
+                'name' : name,
+                'cash_balance': cash_balance,
+                'created_at': datetime.now()
+            }
+            result = supabase.table('portfolios').insert(portfolio_info).execute()
+            print(f"Portfolio {name} with cash balance ${cash_balance} created successfully")
+            return result.data[0]
+        except Exception as e:
+            print(f"Error making portfolio {name}: {e}")
+            return None
+        
+    def get_user_portfolios(self, email):
+        try:
+            user = self.get_user_by_email(email)
+            if not user:
+                print(f"No users found with email: {email}")
+                return None
+            user_id = user['user_id']
+
+            result = supabase.table('portfolios').select('*').eq('user_id', user_id).execute()
+            for portfolio in result:
+                print(f"Retrieved Portfolio {portfolio['name']}")
+            return result.data
+        except Exception as e:
+            print(f"Error getting portfolios for {email}: {e}")
+            return None
+        
+    def update_portfolio_cash(self, cash_value):
+        pass
+
+    def get_portfolio_holdings(self):
+        pass
+
+    def add_stock(self, symbol):
+        try:
+            result = supabase.table('watchlist').insert({
+                'symbol': symbol,
+                'added_at': datetime.now()
+            })
+            print(f"Added stock {symbol} to watchlist")
+            return result.data[0]
+        except Exception as e:
+            print(f"Error adding stock {symbol} to watchlist: {e}")
+            return None
+            
+    def remove_stock(self, symbol):
+        try:
+            result = supabase.table('watchlist').delete().eq('symbol', symbol).execute()
+            print(f"Removed stock {symbol} from watchlist")
+            return result.data[0]
+        except Exception as e:
+            print(f"Error removing stock {symbol} from watchlist: {e}")
+
+    def execute_buy_order(self, portfolio_id, symbol, quantity, price):
+        try:
+            transaction_result = supabase.table('transactions').insert({
+                'portfolio_id': portfolio_id,
+                'symbol': symbol,
+                'quantity': quantity,
+                'price': price,
+                'tx_type': 'buy',
+                'timestamp': datetime.now()
+            }).execute()
+            print(f"BUY transaction recorded for {symbol}")
+            return transaction_result.data
+        except Exception as e:
+            print(f"Error updating buy transaction: {e}")
+            return None
+        
+    def execute_sell_order(self, portfolio_id, symbol, quantity, price):
+        try:
+            transaction_result = supabase.table('transactions').insert({
+                'portfolio_id': portfolio_id,
+                'symbol': symbol,
+                'quantity': -quantity,
+                'price': price,
+                'tx_type': 'sell',
+                'timestamp': datetime.now()
+            }).execute()
+        except Exception as e:
+            print(f"Error updating sell transaction: {e}")
+            return None
+    
+def run_strategy(strategy_type, symbol, portfolio_id):
     data = strategy_type.prepare_backtrading(symbol)
     
     cerebro = bt.Cerebro()
@@ -84,7 +243,7 @@ def run_strategy(strategy_type, symbol):
     print('=' * 50)
     
     cerebro.adddata(bt_data)
-    cerebro.addstrategy(strategy_type, symbol=symbol)
+    cerebro.addstrategy(strategy_type, symbol=symbol, portfolio_id=portfolio_id)
     
     
     # Run backtest
@@ -121,50 +280,3 @@ def run_strategy(strategy_type, symbol):
 
 run_strategy(SentimentTrader, 'WDAY')
 
-# Example usage:
-if __name__ == "__main__":
-    # Create a test user first (since we need a valid user_id)
-    try:
-        # Create a proper password hash for testing
-        test_password = "pass123"
-        password_hash = hashlib.sha256(test_password.encode()).hexdigest()
-        
-        user_data = {
-            'email': 'testuser2@example.com',
-            'password_hash': password_hash,
-            'created_at': datetime.now().isoformat(),
-            'experience_level': 'advanced',
-            'risk_tolerance': 'medium',
-            'paper_trading_balance': 10000.0
-        }
-        user_result = supabase.table('users').insert(user_data).execute()
-        user_id = user_result.data[0]['user_id']
-        print(f"Created test user with ID: {user_id}")
-    except Exception as e:
-        # If user creation fails (maybe already exists), try to get existing user
-        print(f"User creation failed: {e}")
-        existing_user = supabase.table('users').select('user_id').eq('email', 'testuser@example.com').execute()
-        if existing_user.data:
-            user_id = existing_user.data[0]['user_id']
-            print(f"Using existing user ID: {user_id}")
-        else:
-            print("Could not create or find user")
-            exit(1)
-    
-    # Run backtest and save to database
-    portfolio_id = run_database_strategy(
-        user_id=user_id,
-        symbol='AAPL',
-        sentiment_threshold=0.05,
-        hold_days=10
-    )
-    
-    # Retrieve user's backtests
-    backtest_manager = BacktestManager()
-    user_backtests = backtest_manager.get_user_backtests(user_id)
-    
-    # Get transactions for this backtest
-    transactions = backtest_manager.get_backtest_transactions(portfolio_id)
-    print(f"\nTransactions for backtest {portfolio_id}:")
-    for tx in transactions:
-        print(f"- {tx['transaction_type'].upper()} {tx['quantity']} {tx['symbol']} at ${tx['price']:.2f}")
