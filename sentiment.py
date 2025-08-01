@@ -87,7 +87,7 @@ class SentimentTrader(bt.Strategy):
         if order.status in [order.Completed, order.Canceled, order.Rejected]:
             if order.status == order.Completed:
                 if order.isbuy():
-                    print(f"✅ BUY ORDER COMPLETED: {order.executed.size} shares at ${order.executed.price:.2f}")
+                    print(f" BUY ORDER COMPLETED: {order.executed.size} shares at ${order.executed.price:.2f}")
                 else:
                     print(f"✅ SELL ORDER COMPLETED: {order.executed.size} shares at ${order.executed.price:.2f}")
             self.order = None
@@ -420,21 +420,14 @@ class BacktestRunner:
         print(f'Return Percentage: {return_percentage:.2f}%')
         
         if total_return > 0:
-            print(f'✅ PROFIT: You made ${total_return:.2f}!')
+            print(f' PROFIT: You made ${total_return:.2f}!')
         else:
-            print(f'❌ LOSS: You lost ${abs(total_return):.2f}')
+            print(f' LOSS: You lost ${abs(total_return):.2f}')
         
         print('=' * 60)
         
         # Verify database updates
         self.verify_database_updates(portfolio_id)
-        
-        # Generate plot
-        print("Generating plot...")
-        try:
-            cerebro.plot()
-        except Exception as e:
-            print(f"Plotting error: {e}")
         
         return {
             'portfolio_id': portfolio_id,
