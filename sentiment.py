@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from uuid import UUID
 import hashlib
 import os
 
@@ -217,8 +218,35 @@ class TraderDatabase():
         except Exception as e:
             print(f"Error getting holdings for portfolio {portfolio_id}: {e}")
             return {}
-        
     
+    def get_portfolio_by_id(self, portfolio_id):
+        try:
+            result = supabase.table('portfolios').select('*').eq('portfolio_id', portfolio_id).execute()
+            if result.data:
+                return result.data[0]
+            else:
+                print(f"No portfolio with id {portfolio_id} was found")
+                return None
+        except Exception as e:
+            print(f'Error: {e}')
+            return None
+        
+    def transactions_by_portfolio(self, portfolio_id):
+        try:
+            result = supabase.table('transactions').select('*').eq('portfolio_id', portfolio_id).execute()
+            transaction_names = set()
+            if result.data:
+                for transaction in result.data:
+                    transaction_names.add(transaction['symbol'])
+                return transaction_names
+            else:
+                print(f"No transactions found in portfolio: {portfolio_id}")
+                return set()  # Return empty set instead of None
+        except Exception as e:
+            print(f'Error: {e}')
+            return set()
+                
+
     def update_holding(self, portfolio_id, symbol, quantity, avg_price):
         """Update or create a holding entry"""
         try:
@@ -350,17 +378,20 @@ class BacktestRunner:
             print(f"Error cleaning test data: {e}")
     
     def run_backtest(self, symbol, start_date='2023-01-01', end_date='2024-01-01', 
-                    sentiment_threshold=0.01, hold_days=365):
+                    sentiment_threshold=0.01, hold_days=365, initial_cash=10000.0, existing_portfolio_id=None):
         """Run a complete backtest with database integration"""
         
-        # Setup test environment
-        portfolio_id = self.setup_test_environment()
-        if not portfolio_id:
-            print("Failed to setup test environment")
-            return None
-        
-        # Clean previous test data
-        self.clean_test_data(portfolio_id)
+        # Use existing portfolio or setup test environment
+        if existing_portfolio_id:
+            portfolio_id = existing_portfolio_id
+            print(f"Using existing portfolio: {portfolio_id}")
+        else:
+            portfolio_id = self.setup_test_environment()
+            if not portfolio_id:
+                print("Failed to setup test environment")
+                return None
+            # Clean previous test data only for new portfolios
+            self.clean_test_data(portfolio_id)
         
         # Prepare data
         print(f"Downloading data for {symbol} from {start_date} to {end_date}...")
@@ -372,7 +403,6 @@ class BacktestRunner:
         
         # Setup Cerebro
         cerebro = bt.Cerebro()
-        initial_cash = 10000.0
         cerebro.broker.set_cash(initial_cash)
         cerebro.broker.setcommission(commission=0.001)
         
@@ -469,24 +499,50 @@ class BacktestRunner:
             print(f"Error verifying database: {e}")
 
 # Simplified usage functions
-def run_backtest_with_db(symbol='WDAY', start_date='2023-01-01', end_date='2024-01-01', hold_days=365):
+def run_backtest_with_db(symbol='WDAY', start_date='2023-01-01', end_date='2024-01-01', hold_days=365, initial_cash=10000.0):
     """Run backtest and save everything to database"""
     runner = BacktestRunner()
     return runner.run_backtest(
         symbol=symbol,
         start_date=start_date,
         end_date=end_date,
-        hold_days=hold_days
+        hold_days=hold_days,
+        initial_cash=initial_cash,
+        existing_portfolio_id=None  # Create new portfolio
     )
 
-def run_active_backtest(symbol='WDAY', hold_days=30):
+def run_active_backtest(symbol='WDAY', hold_days=30, initial_cash=10000.0):
     """Run backtest with shorter hold period for more activity"""
     runner = BacktestRunner()
     return runner.run_backtest(
         symbol=symbol,
         start_date='2023-01-01',
         end_date='2024-06-01',  # Longer period
-        hold_days=hold_days
+        hold_days=hold_days,
+        initial_cash=initial_cash,
+        existing_portfolio_id=None  # Create new portfolio
+    )
+
+def run_portfolio_backtest(symbol, portfolio_id, hold_days=30):
+    """Run backtest using a specific portfolio's cash balance"""
+    db = TraderDatabase()
+    portfolio = db.get_portfolio_by_id(portfolio_id)
+    
+    if not portfolio:
+        print(f"Portfolio {portfolio_id} not found")
+        return None
+    
+    cash_balance = portfolio['cash_balance']
+    print(f"Running backtest for portfolio {portfolio_id} with cash balance: ${cash_balance}")
+    
+    runner = BacktestRunner()
+    return runner.run_backtest(
+        symbol=symbol,
+        start_date='2023-01-01',
+        end_date='2024-06-01',
+        hold_days=hold_days,
+        initial_cash=cash_balance,
+        existing_portfolio_id=portfolio_id  # Pass the existing portfolio ID
     )
 
 # Example usage:
